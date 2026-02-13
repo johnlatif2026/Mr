@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>لوحة الأدمن</title>
+  <style>
+    body{font-family:system-ui,Arial;max-width:980px;margin:24px auto;padding:0 16px;line-height:1.7}
+    .card{border:1px solid #e5e5e5;border-radius:16px;padding:16px;margin:14px 0}
+    input,textarea{width:100%;padding:10px;border-radius:12px;border:1px solid #ddd}
+    button{padding:10px 14px;border-radius:12px;border:0;background:#111;color:#fff;cursor:pointer;margin-top:10px}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media (max-width:800px){.row{grid-template-columns:1fr}}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #eee;padding:8px;text-align:right;vertical-align:top}
+    small{color:#666}
+  </style>
+</head>
+<body>
+  <h1>لوحة الأدمن</h1>
+  <p><a href="/">فتح الموقع</a> — <a href="#" id="logout">تسجيل خروج</a></p>
+
+  <div class="card">
+    <h2>بيانات المستر</h2>
+    <form id="profileForm">
+      <div class="row">
+        <div><label>الاسم</label><input name="name" required /></div>
+        <div><label>السن</label><input name="age" type="number" min="0" /></div>
+      </div>
+      <div class="row">
+        <div><label>المكان</label><input name="place" /></div>
+        <div><label>الهاتف</label><input name="phone" /></div>
+      </div>
+      <label>لينك الصورة (URL)</label>
+      <input name="photoUrl" />
+      <label>نبذة</label>
+      <textarea name="bio" rows="4"></textarea>
+      <button type="submit">حفظ</button>
+      <p id="profileStatus"></p>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>المواعيد</h2>
+    <p><small>اكتب كل سطر بالشكل: اليوم | الوقت | المكان</small></p>
+    <form id="scheduleForm">
+      <textarea name="itemsText" rows="8" placeholder="مثال: السبت | 6:00م - 8:00م | نادي كذا"></textarea>
+      <button type="submit">حفظ المواعيد</button>
+      <p id="scheduleStatus"></p>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>آخر الطلبات</h2>
+    <button id="refreshInquiries">تحديث</button>
+    <div id="inqStatus"></div>
+    <table>
+      <thead>
+        <tr>
+          <th>الوقت</th><th>الاسم</th><th>الإيميل</th><th>الموبايل</th><th>الرسالة</th>
+        </tr>
+      </thead>
+      <tbody id="inqBody"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const token = localStorage.getItem("admin_token");
+    if (!token) window.location.href = "/login.html";
+
+    function authHeaders() {
+      return { "Authorization": "Bearer " + token, "Content-Type": "application/json" };
+    }
+
+    document.getElementById("logout").addEventListener("click", (e) => {
+      e.preventDefault();
+      localStorage.removeItem("admin_token");
+      window.location.href = "/";
+    });
+
+    async function loadProfileAndSchedule() {
+      const [pRes, sRes] = await Promise.all([
+        fetch("/api/admin/profile", { headers: authHeaders() }),
+        fetch("/api/admin/schedule", { headers: authHeaders() }),
+      ]);
+
+      if (pRes.status === 401 || sRes.status === 401) {
+        localStorage.removeItem("admin_token");
+        return window.location.href = "/login.html";
+      }
+
+      const profile = await pRes.json();
+      const schedule = await sRes.json();
+
+      const pf = document.getElementById("profileForm");
+      pf.name.value = profile.name || "";
+      pf.age.value = (profile.age ?? "");
+      pf.place.value = profile.place || "";
+      pf.phone.value = profile.phone || "";
+      pf.photoUrl.value = profile.photoUrl || "";
+      pf.bio.value = profile.bio || "";
+
+      const lines = (schedule.items || []).map(it => `${it.day} | ${it.time} | ${it.location || ""}`);
+      document.querySelector("#scheduleForm textarea[name='itemsText']").value = lines.join("\n");
+    }
+
+    document.getElementById("profileForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const payload = Object.fromEntries(fd.entries());
+      payload.age = payload.age ? Number(payload.age) : null;
+
+      const status = document.getElementById("profileStatus");
+      status.textContent = "جاري الحفظ...";
+      try {
+        const res = await fetch("/api/admin/profile", {
+          method: "PUT",
+          headers: authHeaders(),
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "فشل الحفظ");
+        status.textContent = "تم الحفظ ✅";
+      } catch (err) {
+        status.textContent = "خطأ: " + err.message;
+      }
+    });
+
+    document.getElementById("scheduleForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = e.target.itemsText.value || "";
+      const items = text.split("\n")
+        .map(l => l.trim())
+        .filter(Boolean)
+        .map(line => {
+          const [day, time, location] = line.split("|").map(x => (x || "").trim());
+          return { day, time, location };
+        })
+        .filter(x => x.day && x.time);
+
+      const status = document.getElementById("scheduleStatus");
+      status.textContent = "جاري الحفظ...";
+      try {
+        const res = await fetch("/api/admin/schedule", {
+          method: "PUT",
+          headers: authHeaders(),
+          body: JSON.stringify({ items })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "فشل الحفظ");
+        status.textContent = "تم الحفظ ✅";
+      } catch (err) {
+        status.textContent = "خطأ: " + err.message;
+      }
+    });
+
+    async function loadInquiries() {
+      const st = document.getElementById("inqStatus");
+      st.textContent = "جاري التحميل...";
+      const body = document.getElementById("inqBody");
+      body.innerHTML = "";
+
+      try {
+        const res = await fetch("/api/admin/inquiries?limit=25", { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "فشل التحميل");
+        st.textContent = "";
+
+        (data.items || []).forEach(it => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><small>${new Date(it.createdAt).toLocaleString("ar-EG")}</small></td>
+            <td>${it.name || ""}</td>
+            <td>${it.email || ""}</td>
+            <td>${it.phone || ""}</td>
+            <td>${(it.message || "").replaceAll("<","&lt;")}</td>
+          `;
+          body.appendChild(tr);
+        });
+      } catch (err) {
+        st.textContent = "خطأ: " + err.message;
+      }
+    }
+
+    document.getElementById("refreshInquiries").addEventListener("click", loadInquiries);
+
+    loadProfileAndSchedule();
+    loadInquiries();
+  </script>
+</body>
+</html>
