@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>تسجيل دخول الأدمن</title>
+  <style>
+    body{font-family:system-ui,Arial;max-width:520px;margin:40px auto;padding:0 16px;line-height:1.7}
+    .card{border:1px solid #e5e5e5;border-radius:16px;padding:16px}
+    input{width:100%;padding:10px;border-radius:12px;border:1px solid #ddd}
+    button{padding:10px 14px;border-radius:12px;border:0;background:#111;color:#fff;cursor:pointer;margin-top:10px}
+    label{display:block;margin-top:10px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>تسجيل دخول الأدمن</h1>
+    <form id="loginForm">
+      <label>الإيميل</label>
+      <input name="email" type="email" required />
+      <label>الباسورد</label>
+      <input name="password" type="password" required />
+      <button type="submit">دخول</button>
+      <p id="status"></p>
+    </form>
+    <p><a href="/">رجوع للموقع</a></p>
+  </div>
+
+  <script>
+    document.getElementById("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const payload = Object.fromEntries(fd.entries());
+      const status = document.getElementById("status");
+      status.textContent = "جاري الدخول...";
+
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "فشل الدخول");
+        localStorage.setItem("admin_token", data.token);
+        window.location.href = "/dashboard.html";
+      } catch (err) {
+        status.textContent = "حصل خطأ: " + err.message;
+      }
+    });
+  </script>
+</body>
+</html>
