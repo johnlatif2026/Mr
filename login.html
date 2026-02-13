@@ -10,40 +10,57 @@
     input{width:100%;padding:10px;border-radius:12px;border:1px solid #ddd}
     button{padding:10px 14px;border-radius:12px;border:0;background:#111;color:#fff;cursor:pointer;margin-top:10px}
     label{display:block;margin-top:10px}
+    .hint{color:#666;font-size:14px;margin-top:8px}
   </style>
 </head>
 <body>
   <div class="card">
     <h1>تسجيل دخول الأدمن</h1>
+
     <form id="loginForm">
-      <label>الإيميل</label>
-      <input name="email" type="email" required />
-      <label>الباسورد</label>
-      <input name="password" type="password" required />
+      <label>اسم المستخدم</label>
+      <input name="username" autocomplete="username" required />
+
+      <label>كلمة المرور</label>
+      <input name="password" type="password" autocomplete="current-password" required />
+
       <button type="submit">دخول</button>
-      <p id="status"></p>
+      <p id="status" class="hint"></p>
     </form>
-    <p><a href="/">رجوع للموقع</a></p>
+
+    <p class="hint"><a href="/">رجوع للموقع</a></p>
   </div>
 
   <script>
+    // لو الأدمن مسجل دخول بالفعل، ودّيه على الداشبورد
+    const existing = localStorage.getItem("admin_token");
+    if (existing) {
+      window.location.href = "/dashboard";
+    }
+
     document.getElementById("loginForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       const payload = Object.fromEntries(fd.entries());
+
       const status = document.getElementById("status");
-      status.textContent = "جاري الدخول...";
+      status.textContent = "جاري تسجيل الدخول...";
 
       try {
         const res = await fetch("/api/auth/login", {
           method: "POST",
           headers: {"Content-Type":"application/json"},
-          body: JSON.stringify(payload)
+          body: JSON.stringify({
+            username: String(payload.username || "").trim(),
+            password: String(payload.password || "")
+          })
         });
+
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error || "فشل الدخول");
+
         localStorage.setItem("admin_token", data.token);
-        window.location.href = "/dashboard.html";
+        window.location.href = "/dashboard";
       } catch (err) {
         status.textContent = "حصل خطأ: " + err.message;
       }
