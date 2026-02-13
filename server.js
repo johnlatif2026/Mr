@@ -3,17 +3,49 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const nodemailer = require("nodemailer");
 const admin = require("firebase-admin");
+const path = require("path");
 
 require("dotenv").config();
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-/**
- * Firebase Admin (Firestore)
- * - على Vercel الأفضل تحط service account في ENV كسطر واحد (JSON string) أو Base64
- * Docs: Firebase Admin setup. :contentReference[oaicite:4]{index=4}
- */
+// ---------- Helpers ----------
+function requireEnv(name) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env: ${name}`);
+  return v;
+}
+
+function signToken(payload) {
+  const secret = requireEnv("JWT_SECRET");
+  return jwt.sign(payload, secret, { expiresIn: "7d" });
+}
+
+function authMiddleware(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "Missing token" });
+
+  try {
+    const secret = requireEnv("JWT_SECRET");
+    req.user = jwt.verify(token, secret);
+    return next();
+  } catch (e) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+// ---------- Serve pretty routes (/login, /dashboard) ----------
+app.get("/login", (_req, res) => {
+  return res.sendFile(path.join(__dirname, "login.html"));
+});
+
+app.get("/dashboard", (_req, res) => {
+  return res.sendFile(path.join(__dirname, "dashboard.html"));
+});
+
+// ---------- Firebase Admin (Firestore) ----------
 function initFirebaseAdmin() {
   if (admin.apps.length) return;
 
@@ -38,42 +70,21 @@ initFirebaseAdmin();
 
 const db = admin.firestore();
 
-// ---------- Helpers ----------
-function requireEnv(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
-
-function signToken(payload) {
-  const secret = requireEnv("JWT_SECRET");
-  // JWT في Express عادة بتتعامل مع sign/verify. (مرجع عام للـ JWT في Express) :contentReference[oaicite:5]{index=5}
-  return jwt.sign(payload, secret, { expiresIn: "7d" });
-}
-
-function authMiddleware(req, res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: "Missing token" });
-
-  try {
-    const secret = requireEnv("JWT_SECRET");
-    req.user = jwt.verify(token, secret);
-    return next();
-  } catch (e) {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-}
+// ---------- Firestore refs ----------
+const profileRef = db.collection("site").doc("profile");
+const scheduleRef = db.collection("site").doc("schedule");
+const inquiriesCol = db.collection("inquiries");
 
 // ---------- Email ----------
 async function sendEmail({ subject, text }) {
-  // Nodemailer SMTP docs :contentReference[oaicite:6]{index=6}
   const host = requireEnv("SMTP_HOST");
   const port = Number(requireEnv("SMTP_PORT"));
   const user = requireEnv("SMTP_USER");
   const pass = requireEnv("SMTP_PASS");
-  const to = requireEnv("MASTER_EMAIL_TO");
-  const from = process.env.EMAIL_FROM || user;
+
+  // دول اللي سألت عنهم:
+  const to = requireEnv("MASTER_EMAIL_TO");      // الرسالة هتروح لمين
+  const from = process.env.EMAIL_FROM || user;   // الرسالة جاية من مين (غالباً نفس SMTP_USER)
 
   const transporter = nodemailer.createTransport({
     host,
@@ -87,7 +98,6 @@ async function sendEmail({ subject, text }) {
 
 // ---------- Telegram ----------
 async function sendTelegram(text) {
-  // Telegram Bot API docs :contentReference[oaicite:7]{index=7}
   const token = requireEnv("TELEGRAM_BOT_TOKEN");
   const chatId = requireEnv("TELEGRAM_CHAT_ID");
 
@@ -104,16 +114,10 @@ async function sendTelegram(text) {
   }
 }
 
-// ---------- Firestore refs ----------
-const profileRef = db.collection("site").doc("profile");
-const scheduleRef = db.collection("site").doc("schedule");
-const inquiriesCol = db.collection("inquiries");
-
-// ---------- Public ----------
+// ---------- Public API ----------
 app.get("/api/public/profile", async (_req, res) => {
   const snap = await profileRef.get();
   if (!snap.exists) {
-    // defaults
     return res.json({
       name: "مستر رياضة",
       bio: "اكتب نبذة هنا من الداشبورد",
@@ -154,31 +158,43 @@ app.post("/api/public/inquiry", async (req, res) => {
     `الرسالة:\n${message}\n` +
     `الوقت: ${createdAt}`;
 
-  // إرسال الإيميل + التيليجرام (لو في إعدادات SMTP/Telegram)
-  try { await sendEmail({ subject: "طلب جديد من موقع المستر", text }); } catch (e) { /* تجاهل */ }
-  try { await sendTelegram(text); } catch (e) { /* تجاهل */ }
+  // لو الإعدادات موجودة، يبعت — لو ناقصة، يتجاهل بدون ما يوقع السيرفر
+  try { await sendEmail({ subject: "طلب جديد من موقع المستر", text }); } catch (e) {}
+  try { await sendTelegram(text); } catch (e) {}
 
   return res.json({ ok: true });
 });
 
-// ---------- Auth ----------
+// ---------- Auth (USERNAME/PASSWORD) ----------
+const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || "").trim();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+
+// نعمل هاش داخلي للباسورد (بدل ما نخزن هاش في env) — أبسط للموبايل
+// (أمنياً الأفضل تستخدم ADMIN_PASSWORD_HASH، لكن ده حل عملي سريع)
+const ADMIN_PASSWORD_HASH = ADMIN_PASSWORD
+  ? bcrypt.hashSync(ADMIN_PASSWORD, 10)
+  : null;
+
 app.post("/api/auth/login", async (req, res) => {
-  const email = String(req.body.email || "").trim().toLowerCase();
+  const username = String(req.body.username || "").trim();
   const password = String(req.body.password || "");
 
-  const adminEmail = requireEnv("ADMIN_EMAIL").trim().toLowerCase();
-  const hash = requireEnv("ADMIN_PASSWORD_HASH");
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) {
+    return res.status(500).json({ error: "Admin env not configured" });
+  }
 
-  if (email !== adminEmail) return res.status(401).json({ error: "Invalid credentials" });
+  if (username !== ADMIN_USERNAME) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
 
-  const ok = await bcrypt.compare(password, hash);
+  const ok = await bcrypt.compare(password, ADMIN_PASSWORD_HASH);
   if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
-  const token = signToken({ role: "admin", email: adminEmail });
+  const token = signToken({ role: "admin", username });
   return res.json({ token });
 });
 
-// ---------- Admin (JWT protected) ----------
+// ---------- Admin API (JWT protected) ----------
 app.get("/api/admin/profile", authMiddleware, async (_req, res) => {
   const snap = await profileRef.get();
   return res.json(snap.exists ? snap.data() : {});
@@ -234,4 +250,5 @@ module.exports = (req, res) => app(req, res);
 if (require.main === module) {
   const port = Number(process.env.PORT || 3000);
   app.listen(port, () => console.log("Running on http://localhost:" + port));
-}
+    }
+  
