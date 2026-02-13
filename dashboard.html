@@ -14,11 +14,18 @@
     table{width:100%;border-collapse:collapse}
     th,td{border-bottom:1px solid #eee;padding:8px;text-align:right;vertical-align:top}
     small{color:#666}
+    .topbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+    .links a{margin-inline-start:10px}
   </style>
 </head>
 <body>
-  <h1>لوحة الأدمن</h1>
-  <p><a href="/">فتح الموقع</a> — <a href="#" id="logout">تسجيل خروج</a></p>
+  <div class="topbar">
+    <h1>لوحة الأدمن</h1>
+    <div class="links">
+      <a href="/">فتح الموقع</a>
+      <a href="#" id="logout">تسجيل خروج</a>
+    </div>
+  </div>
 
   <div class="card">
     <h2>بيانات المستر</h2>
@@ -27,33 +34,38 @@
         <div><label>الاسم</label><input name="name" required /></div>
         <div><label>السن</label><input name="age" type="number" min="0" /></div>
       </div>
+
       <div class="row">
         <div><label>المكان</label><input name="place" /></div>
         <div><label>الهاتف</label><input name="phone" /></div>
       </div>
+
       <label>لينك الصورة (URL)</label>
       <input name="photoUrl" />
+
       <label>نبذة</label>
       <textarea name="bio" rows="4"></textarea>
+
       <button type="submit">حفظ</button>
-      <p id="profileStatus"></p>
+      <p id="profileStatus"><small></small></p>
     </form>
   </div>
 
   <div class="card">
     <h2>المواعيد</h2>
-    <p><small>اكتب كل سطر بالشكل: اليوم | الوقت | المكان</small></p>
+    <p><small>كل سطر بالشكل: اليوم | الوقت | المكان</small></p>
     <form id="scheduleForm">
       <textarea name="itemsText" rows="8" placeholder="مثال: السبت | 6:00م - 8:00م | نادي كذا"></textarea>
       <button type="submit">حفظ المواعيد</button>
-      <p id="scheduleStatus"></p>
+      <p id="scheduleStatus"><small></small></p>
     </form>
   </div>
 
   <div class="card">
     <h2>آخر الطلبات</h2>
     <button id="refreshInquiries">تحديث</button>
-    <div id="inqStatus"></div>
+    <div id="inqStatus"><small></small></div>
+
     <table>
       <thead>
         <tr>
@@ -65,17 +77,24 @@
   </div>
 
   <script>
+    // حماية الصفحة: لازم JWT
     const token = localStorage.getItem("admin_token");
-    if (!token) window.location.href = "/login.html";
+    if (!token) {
+      window.location.href = "/login";
+    }
 
     function authHeaders() {
       return { "Authorization": "Bearer " + token, "Content-Type": "application/json" };
     }
 
+    async function safeJson(res) {
+      try { return await res.json(); } catch { return {}; }
+    }
+
     document.getElementById("logout").addEventListener("click", (e) => {
       e.preventDefault();
       localStorage.removeItem("admin_token");
-      window.location.href = "/";
+      window.location.href = "/login";
     });
 
     async function loadProfileAndSchedule() {
@@ -86,11 +105,11 @@
 
       if (pRes.status === 401 || sRes.status === 401) {
         localStorage.removeItem("admin_token");
-        return window.location.href = "/login.html";
+        return window.location.href = "/login";
       }
 
-      const profile = await pRes.json();
-      const schedule = await sRes.json();
+      const profile = await safeJson(pRes);
+      const schedule = await safeJson(sRes);
 
       const pf = document.getElementById("profileForm");
       pf.name.value = profile.name || "";
@@ -110,16 +129,23 @@
       const payload = Object.fromEntries(fd.entries());
       payload.age = payload.age ? Number(payload.age) : null;
 
-      const status = document.getElementById("profileStatus");
+      const status = document.querySelector("#profileStatus small");
       status.textContent = "جاري الحفظ...";
+
       try {
         const res = await fetch("/api/admin/profile", {
           method: "PUT",
           headers: authHeaders(),
           body: JSON.stringify(payload)
         });
-        const data = await res.json();
+
+        const data = await safeJson(res);
+        if (res.status === 401) {
+          localStorage.removeItem("admin_token");
+          return window.location.href = "/login";
+        }
         if (!res.ok) throw new Error(data?.error || "فشل الحفظ");
+
         status.textContent = "تم الحفظ ✅";
       } catch (err) {
         status.textContent = "خطأ: " + err.message;
@@ -129,6 +155,7 @@
     document.getElementById("scheduleForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = e.target.itemsText.value || "";
+
       const items = text.split("\n")
         .map(l => l.trim())
         .filter(Boolean)
@@ -138,16 +165,23 @@
         })
         .filter(x => x.day && x.time);
 
-      const status = document.getElementById("scheduleStatus");
+      const status = document.querySelector("#scheduleStatus small");
       status.textContent = "جاري الحفظ...";
+
       try {
         const res = await fetch("/api/admin/schedule", {
           method: "PUT",
           headers: authHeaders(),
           body: JSON.stringify({ items })
         });
-        const data = await res.json();
+
+        const data = await safeJson(res);
+        if (res.status === 401) {
+          localStorage.removeItem("admin_token");
+          return window.location.href = "/login";
+        }
         if (!res.ok) throw new Error(data?.error || "فشل الحفظ");
+
         status.textContent = "تم الحفظ ✅";
       } catch (err) {
         status.textContent = "خطأ: " + err.message;
@@ -155,15 +189,21 @@
     });
 
     async function loadInquiries() {
-      const st = document.getElementById("inqStatus");
+      const st = document.querySelector("#inqStatus small");
       st.textContent = "جاري التحميل...";
       const body = document.getElementById("inqBody");
       body.innerHTML = "";
 
       try {
         const res = await fetch("/api/admin/inquiries?limit=25", { headers: authHeaders() });
-        const data = await res.json();
+        const data = await safeJson(res);
+
+        if (res.status === 401) {
+          localStorage.removeItem("admin_token");
+          return window.location.href = "/login";
+        }
         if (!res.ok) throw new Error(data?.error || "فشل التحميل");
+
         st.textContent = "";
 
         (data.items || []).forEach(it => {
@@ -173,10 +213,14 @@
             <td>${it.name || ""}</td>
             <td>${it.email || ""}</td>
             <td>${it.phone || ""}</td>
-            <td>${(it.message || "").replaceAll("<","&lt;")}</td>
+            <td>${String(it.message || "").replaceAll("<","&lt;")}</td>
           `;
           body.appendChild(tr);
         });
+
+        if (!data.items || data.items.length === 0) {
+          st.textContent = "لا توجد طلبات حالياً.";
+        }
       } catch (err) {
         st.textContent = "خطأ: " + err.message;
       }
